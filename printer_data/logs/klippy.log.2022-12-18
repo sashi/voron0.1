@@ -1,0 +1,527 @@
+Starting Klippy...
+Args: ['/home/pi/klipper/klippy/klippy.py', '/home/pi/printer_data/config/printer.cfg', '-I', '/home/pi/printer_data/comms/klippy.serial', '-l', '/home/pi/printer_data/logs/klippy.log', '-a', '/home/pi/printer_data/comms/klippy.sock']
+Git version: 'v0.11.0-22-gfe0fc296'
+CPU: 4 core ?
+Python: '3.9.2 (default, Feb 28 2021, 17:03:44) \n[GCC 10.2.1 20210110]'
+Start printer at Sun Dec 18 15:06:22 2022 (1671404782.2 33.0)
+===== Config file =====
+[pause_resume]
+
+[display_status]
+
+[gcode_macro START_PRINT]
+gcode = 
+	CLEAR_PAUSE
+	M117 Print Starting...
+	{% set T_BED = params.T_BED|default(190)|float %}
+	{% set T_EXTRUDER = params.T_EXTRUDER|default(60)|float %}
+	M109 S{T_EXTRUDER}
+	M190 S{T_BED}
+	M117 Homing All...
+	G28
+	G92 E0
+	G90
+	G92 E0
+	G1 X15 Y10 Z5 F6000
+	M117 Waiting for Temps
+	M190 S{T_BED}
+	M109 S{T_EXTRUDER}
+	PRIME_LINE
+	M117 Printing.....
+
+[gcode_macro END_PRINT]
+gcode = 
+	SAVE_GCODE_STATE NAME=end_print
+	M117 Done printing
+	G91
+	G1 E-10 F3600
+	G1 Z50
+	G4 P1000
+	G90
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	{% set x_max = printer.toolhead.axis_minimum.x|float + 25.0 %}
+	{% set y_max = printer.toolhead.axis_minimum.y|float + 25.0 %}
+	G1 X{x_max} Y{y_max} F2000
+	
+	M104 S0
+	M140 S0
+	RESTORE_GCODE_STATE NAME=end_print
+	M84
+
+[gcode_macro PRIME_LINE]
+gcode = 
+	M117 Prime Line
+	G92 E0
+	
+	G1 Z2.0 F3000
+	
+	G1 X2 Y2 Z2.28 F5000
+	G1 X2 Y50 Z2.28 F500 E15
+	G1 X3 Y50 Z2.28 F5000
+	G1 X3 Y5 Z2.28 F500 E30
+	G92 E0
+	G1 Z2.0 F3000
+
+[gcode_macro M205]
+gcode = 
+	{% if 'X' in params %}
+	SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY={ X }
+	{% endif %}
+
+[gcode_macro M600]
+gcode = 
+	{% set X = params.X|default(50)|float %}
+	{% set Y = params.Y|default(0)|float %}
+	{% set Z = params.Z|default(10)|float %}
+	SAVE_GCODE_STATE NAME=M600_state
+	PAUSE
+	G91
+	G1 E-.8 F2700
+	G1 Z{Z}
+	G90
+	G1 X{X} Y{Y} F3000
+	G91
+	G1 E-50 F1000
+	SET_IDLE_TIMEOUT TIMEOUT=86400
+	M117 Paused
+	RESTORE_GCODE_STATE NAME=M600_state
+
+[gcode_macro LOAD]
+gcode = 
+	SAVE_GCODE_STATE NAME=loading_filament
+	M83
+	G92 E0.0
+	G1 E40 F500
+	G1 E40 F100
+	G92 E0.0
+	RESTORE_GCODE_STATE NAME=loading_filament
+
+[gcode_macro UNLOAD]
+gcode = 
+	SAVE_GCODE_STATE NAME=unloading_filament
+	G91
+	G1 E10 F100
+	G92 E0.0
+	G1 E-50 F1000
+	G92 E0.0
+	RESTORE_GCODE_STATE NAME=unloading_filament
+
+[gcode_macro CANCEL_PRINT]
+rename_existing = BASE_CANCEL_PRINT
+gcode = 
+	TURN_OFF_HEATERS
+	CLEAR_PAUSE
+	SDCARD_RESET_FILE
+	BASE_CANCEL_PRINT
+
+[bed_screws]
+screw1 = 60,5
+screw1_name = front screw
+screw2 = 5,115
+screw2_name = back left
+screw3 = 115,115
+screw3_name = back right
+
+[gcode_macro PRESSURE_ADVANCE_LIST]
+description = List all filament pressure advance settings
+gcode = 
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: No filament defined ABORDED")}
+	{% else %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% set out = ["PRESSURE ADVANCE: Defined filaments"] %}
+	{% for filament in pa_dic|sort(attribute='id') %}
+	{% set _dummy = out.append("%s" % filament.id) %}
+	{% for setup in filament.val|sort(attribute='nozzle') %}
+	{% set _dummy = out.append("Nozzle: %1.02f | Pressure Advance: %1.03f | Smooth Time: %1.03f" %
+	(setup.nozzle, setup.pa, setup.st)) %}
+	{% endfor %}
+	{% endfor %}
+	{action_respond_info(out|join("\n"))}
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_ADD]
+description = Add or change pressure advance settings
+gcode = 
+	{% if 'FILAMENT' not in params|upper %}
+	{action_respond_info("PRESSURE ADVANCE: FILAMENT must be defined use \"PRESSURE_ADVANCE_ADD FILAMENT=id\" as a minimum")}
+	{% else %}
+	{% set cfg = printer.configfile.settings.extruder %}
+	{% set id = params.FILAMENT|string %}
+	{% set nozzle = params.NOZZLE|default(0.40)|float|round(2) %}
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: Initialize with Filament %s" % (id))}
+	{% set pa_dic = [{'id' : id,
+	'val': [{'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}]}] %}
+	{% else %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% set id_index = loop.index0 %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{% set change_txt = [] %}
+	{% if 'PRESSURE_ADVANCE' in params|upper %}
+	{% set _dummy = change_txt.append("PRESSURE ADVANCE") %}
+	{% set _dummy = pa_dic[id_index].val[loop.index0].update({'pa': params.PRESSURE_ADVANCE|float|round(3)}) %}
+	{% endif %}
+	{% if 'SMOOTH_TIME' in params|upper %}
+	{% set _dummy = change_txt.append("SMOOTH TIME") %}
+	{% set _dummy = pa_dic[id_index].val[loop.index0].update({'st': params.SMOOTH_TIME|float|round(3)}) %}
+	{% endif %}
+	{% if change_txt|length > 0 %}
+	{action_respond_info("PRESSURE ADVANCE: Changed %s at Filament %s Nozzle %s" % (change_txt|join(" and "),id,nozzle))}
+	{% else %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing changed at Filament %s Nozzle %s" % (id,nozzle))}
+	{% endif %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Add setup for Nozzle %s at Filament %s" % (nozzle,id))}
+	{% set _dummy = pa_dic[id_index].val.append({'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}) %}
+	{% endif%}
+	{% endfor %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Add setup for Filament %s" % (id))}
+	{% set _dummy = pa_dic.append({'id' : id,
+	'val': [{'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}]}) %}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	SAVE_VARIABLE VARIABLE=pressure_advance VALUE="{pa_dic}"
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_REMOVE]
+description = Remove a filament or a nezzle setup
+gcode = 
+	{% if 'FILAMENT' not in params|upper %}
+	{action_respond_info("PRESSURE ADVANCE: FILAMENT must be defined use \"PRESSURE_ADVANCE_REMOVE FILAMENT=id\" as a minimum")}
+	{% else %}
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, no save_variable defined yet")}
+	{% else %}
+	{% set id = params.FILAMENT|string %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% if 'NOZZLE' in params|upper %}
+	{% set nozzle = params.NOZZLE|float|round(2) %}
+	{% set id_index = loop.index0 %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{action_respond_info("PRESSURE ADVANCE: Remove Nozzle %s at Filament %s" % (nozzle,id))}
+	{% set _dummy = pa_dic[id_index].val.pop(loop.index0) %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, Nozzle %s at Filament %s not defined" % (nozzle,id))}
+	{% endif%}
+	{% endfor %}
+	{% else %}
+	{action_respond_info("PRESSURE ADVANCE: Remove Filament %s" % id)}
+	{% set _dummy = pa_dic.pop(loop.index0) %}
+	{% endif %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, Filament %s not defined" % id)}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	SAVE_VARIABLE VARIABLE=pressure_advance VALUE="{pa_dic}"
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_SELECT]
+description = Set PA depending on nozzle and filament
+gcode = 
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: No filament defined ABORDED")}
+	{% else %}
+	{% set nozzle = params.NOZZLE|default(0.4)|float %}
+	{% set id = params.FILAMENT|default('None')|string %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% set found = {'id'    : 'default',
+	'nozzle': 0.4,
+	'pa'    : printer.configfile.settings.extruder.pressure_advance,
+	'st'    : printer.configfile.settings.extruder.pressure_advance_smooth_time} %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{% set _dummy = found.update({'id': filament.id}) %}
+	{% set _dummy = found.update({'nozzle': setup.nozzle}) %}
+	{% set _dummy = found.update({'pa': setup.pa}) %}
+	{% set _dummy = found.update({'st': setup.st}) %}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	{% endfor %}
+	SET_PRESSURE_ADVANCE ADVANCE={found.pa} SMOOTH_TIME={found.st}
+	{action_respond_info("PRESSURE ADVANCE:
+	Filament: %s   Nozzle: %1.02f
+	Pressure Advance: %1.03f Smooth Time: %1.03f" % (found.id, found.nozzle, found.pa, found.st))}
+	{% endif %}
+
+[gcode_macro TEST_SPEED]
+gcode = 
+	
+	{% set speed  = params.SPEED|default(printer.configfile.settings.printer.max_velocity)|int %}
+	
+	{% set iterations = params.ITERATIONS|default(5)|int %}
+	
+	{% set accel  = params.ACCEL|default(printer.configfile.settings.printer.max_accel)|int %}
+	
+	{% set bound = params.BOUND|default(20)|int %}
+	
+	{% set smallpatternsize = SMALLPATTERNSIZE|default(20)|int %}
+	
+	
+	
+	{% set x_min = printer.toolhead.axis_minimum.x + bound %}
+	{% set x_max = printer.toolhead.axis_maximum.x - bound %}
+	{% set y_min = printer.toolhead.axis_minimum.y + bound %}
+	{% set y_max = printer.toolhead.axis_maximum.y - bound %}
+	
+	
+	
+	{% set x_center = (printer.toolhead.axis_minimum.x|float + printer.toolhead.axis_maximum.x|float ) / 2 %}
+	{% set y_center = (printer.toolhead.axis_minimum.y|float + printer.toolhead.axis_maximum.y|float ) / 2 %}
+	
+	
+	{% set x_center_min = x_center - (smallpatternsize/2) %}
+	{% set x_center_max = x_center + (smallpatternsize/2) %}
+	{% set y_center_min = y_center - (smallpatternsize/2) %}
+	{% set y_center_max = y_center + (smallpatternsize/2) %}
+	
+	
+	SAVE_GCODE_STATE NAME=TEST_SPEED
+	
+	
+	{ action_respond_info("TEST_SPEED: starting %d iterations at speed %d, accel %d" % (iterations, speed, accel)) }
+	
+	
+	G28
+	
+	{% if printer.configfile.settings.quad_gantry_level %}
+	{% if printer.quad_gantry_level.applied == False %}
+	QUAD_GANTRY_LEVEL
+	G28 Z
+	{% endif %}
+	{% endif %}
+	
+	G90
+	G1 X{printer.toolhead.axis_maximum.x-50} Y{printer.toolhead.axis_maximum.y-50} F{30*60}
+	G28 X Y
+	G0 X{printer.toolhead.axis_maximum.x-1} Y{printer.toolhead.axis_maximum.y-1} F{30*60}
+	G4 P1000
+	GET_POSITION
+	
+	
+	G0 X{x_min} Y{y_min} Z{bound + 10} F{speed*60}
+	
+	
+	SET_VELOCITY_LIMIT VELOCITY={speed} ACCEL={accel} ACCEL_TO_DECEL={accel / 2}
+	
+	{% for i in range(iterations) %}
+	
+	
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_max} Y{y_max} F{speed*60}
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	G0 X{x_min} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	
+	
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_min} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	
+	
+	
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_max} Y{y_center_max} F{speed*60}
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	G0 X{x_center_min} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	
+	
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_min} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	{% endfor %}
+	
+	
+	SET_VELOCITY_LIMIT VELOCITY={printer.configfile.settings.printer.max_velocity} ACCEL={printer.configfile.settings.printer.max_accel} ACCEL_TO_DECEL={printer.configfile.settings.printer.max_accel_to_decel}
+	
+	
+	G28
+	
+	G90
+	G0 X{printer.toolhead.axis_maximum.x-1} Y{printer.toolhead.axis_maximum.y-1} F{30*60}
+	G4 P1000
+	GET_POSITION
+	
+	
+	RESTORE_GCODE_STATE NAME=TEST_SPEED
+
+[save_variables]
+filename = ~/printer_data/config/.variables.stb
+
+[virtual_sdcard]
+path = ~/printer_data/gcodes
+
+[mcu]
+serial = /dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00
+
+[stepper_x]
+step_pin = PB13
+dir_pin = PB12
+enable_pin = !PB14
+rotation_distance = 40
+microsteps = 16
+endstop_pin = PC0
+position_endstop = 118
+position_max = 118
+homing_speed = 20
+homing_retract_dist = 5
+homing_positive_dir = true
+
+[tmc2209 stepper_x]
+uart_pin = PB15
+interpolate = true
+run_current = 0.5
+sense_resistor = 0.110
+stealthchop_threshold = 500
+
+[stepper_y]
+step_pin = PB10
+dir_pin = PB2
+enable_pin = !PB11
+rotation_distance = 40
+microsteps = 16
+endstop_pin = PC1
+position_endstop = 120
+position_max = 120
+homing_speed = 20
+homing_retract_dist = 5
+homing_positive_dir = true
+
+[tmc2209 stepper_y]
+uart_pin = PC6
+interpolate = true
+run_current = 0.5
+sense_resistor = 0.110
+stealthchop_threshold = 500
+
+[stepper_z]
+step_pin = PB0
+dir_pin = !PC5
+enable_pin = !PB1
+rotation_distance = 8
+microsteps = 16
+endstop_pin = PC2
+position_endstop = -0.180
+position_max = 120
+position_min = -1
+homing_speed = 10
+second_homing_speed = 3.0
+homing_retract_dist = 3.0
+
+[tmc2209 stepper_z]
+uart_pin = PC10
+interpolate = false
+run_current = 0.600
+sense_resistor = 0.110
+stealthchop_threshold = 0
+
+[extruder]
+step_pin = PB3
+dir_pin = PB4
+enable_pin = !PD2
+rotation_distance = 13.1544
+gear_ratio = 50:17
+microsteps = 16
+nozzle_diameter = 0.400
+filament_diameter = 1.750
+heater_pin = PC8
+sensor_type = ATC Semitec 104GT-2
+sensor_pin = PA0
+control = pid
+pid_kp = 19.933
+pid_ki = 0.916
+pid_kd = 108.388
+min_temp = 0
+max_temp = 270
+min_extrude_temp = 0
+max_extrude_only_distance = 780.0
+max_extrude_cross_section = 50.0
+
+[tmc2209 extruder]
+uart_pin = PC11
+interpolate = false
+run_current = 0.4
+sense_resistor = 0.110
+stealthchop_threshold = 0
+
+[heater_bed]
+heater_pin = PC9
+sensor_type = ATC Semitec 104GT-2
+control = pid
+pid_kp = 30.821
+pid_ki = 0.430
+pid_kd = 552.458
+min_temp = 0
+max_temp = 200
+sensor_pin = PC3
+smooth_time = 3.0
+max_power = 0.5
+
+[printer]
+kinematics = corexy
+max_velocity = 500
+max_accel = 6000
+max_z_velocity = 15
+max_z_accel = 45
+square_corner_velocity = 6.0
+
+[fan]
+pin = PA8
+kick_start_time = 0.5
+off_below = 0.13
+cycle_time = 0.010
+
+[idle_timeout]
+timeout = 3600
+
+[homing_override]
+axes = z
+set_position_z = 0
+gcode = 
+	G90
+	G0 Z5 F600
+	G28 X Y
+	G0 X30 Y0 F3600
+	
+	G28 Z
+	G0 Z10 F1800
+	G0 X60 Y60 Z20 F3600
+=======================
+Extruder max_extrude_ratio=20.787584
+mcu 'mcu': Starting serial connect
+mcu 'mcu': Unable to open serial port: [Errno 2] could not open port /dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00: [Errno 2] No such file or directory: '/dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00'
+webhooks client 547960987072: New connection
+webhooks client 547960987072: Client info {'program': 'Moonraker', 'version': 'v0.7.1-780-gdde9bcc'}
+mcu 'mcu': Unable to open serial port: [Errno 2] could not open port /dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00: [Errno 2] No such file or directory: '/dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00'

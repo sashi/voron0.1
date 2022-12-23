@@ -1,0 +1,1282 @@
+===== Config file =====
+[pause_resume]
+
+[display_status]
+
+[gcode_macro START_PRINT]
+gcode = 
+	CLEAR_PAUSE
+	M117 Print Starting...
+	{% set T_BED = params.T_BED|default(190)|float %}
+	{% set T_EXTRUDER = params.T_EXTRUDER|default(60)|float %}
+	M109 S{T_EXTRUDER}
+	M190 S{T_BED}
+	M117 Homing All...
+	G28
+	G92 E0
+	G90
+	G92 E0
+	G1 X15 Y10 Z5 F6000
+	M117 Waiting for Temps
+	M190 S{T_BED}
+	M109 S{T_EXTRUDER}
+	PRIME_LINE
+	M117 Printing.....
+
+[gcode_macro END_PRINT]
+gcode = 
+	SAVE_GCODE_STATE NAME=end_print
+	M117 Done printing
+	G91
+	G1 E-10 F3600
+	G1 Z50
+	G4 P1000
+	G90
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	{% set x_max = printer.toolhead.axis_minimum.x|float + 25.0 %}
+	{% set y_max = printer.toolhead.axis_minimum.y|float + 25.0 %}
+	G1 X{x_max} Y{y_max} F2000
+	
+	M104 S0
+	M140 S0
+	RESTORE_GCODE_STATE NAME=end_print
+	M84
+
+[gcode_macro PRIME_LINE]
+gcode = 
+	M117 Prime Line
+	G92 E0
+	
+	G1 Z2.0 F3000
+	
+	G1 X2 Y2 Z2.28 F5000
+	G1 X2 Y50 Z2.28 F500 E15
+	G1 X3 Y50 Z2.28 F5000
+	G1 X3 Y5 Z2.28 F500 E30
+	G92 E0
+	G1 Z2.0 F3000
+
+[gcode_macro M205]
+gcode = 
+	{% if 'X' in params %}
+	SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY={ X }
+	{% endif %}
+
+[gcode_macro M600]
+gcode = 
+	{% set X = params.X|default(50)|float %}
+	{% set Y = params.Y|default(0)|float %}
+	{% set Z = params.Z|default(10)|float %}
+	SAVE_GCODE_STATE NAME=M600_state
+	PAUSE
+	G91
+	G1 E-.8 F2700
+	G1 Z{Z}
+	G90
+	G1 X{X} Y{Y} F3000
+	G91
+	G1 E-50 F1000
+	SET_IDLE_TIMEOUT TIMEOUT=86400
+	M117 Paused
+	RESTORE_GCODE_STATE NAME=M600_state
+
+[gcode_macro LOAD]
+gcode = 
+	SAVE_GCODE_STATE NAME=loading_filament
+	M83
+	G92 E0.0
+	G1 E40 F500
+	G1 E40 F100
+	G92 E0.0
+	RESTORE_GCODE_STATE NAME=loading_filament
+
+[gcode_macro UNLOAD]
+gcode = 
+	SAVE_GCODE_STATE NAME=unloading_filament
+	G91
+	G1 E10 F100
+	G92 E0.0
+	G1 E-50 F1000
+	G92 E0.0
+	RESTORE_GCODE_STATE NAME=unloading_filament
+
+[gcode_macro CANCEL_PRINT]
+rename_existing = BASE_CANCEL_PRINT
+gcode = 
+	TURN_OFF_HEATERS
+	CLEAR_PAUSE
+	SDCARD_RESET_FILE
+	BASE_CANCEL_PRINT
+
+[bed_screws]
+screw1 = 60,5
+screw1_name = front screw
+screw2 = 5,115
+screw2_name = back left
+screw3 = 115,115
+screw3_name = back right
+
+[gcode_macro PRESSURE_ADVANCE_LIST]
+description = List all filament pressure advance settings
+gcode = 
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: No filament defined ABORDED")}
+	{% else %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% set out = ["PRESSURE ADVANCE: Defined filaments"] %}
+	{% for filament in pa_dic|sort(attribute='id') %}
+	{% set _dummy = out.append("%s" % filament.id) %}
+	{% for setup in filament.val|sort(attribute='nozzle') %}
+	{% set _dummy = out.append("Nozzle: %1.02f | Pressure Advance: %1.03f | Smooth Time: %1.03f" %
+	(setup.nozzle, setup.pa, setup.st)) %}
+	{% endfor %}
+	{% endfor %}
+	{action_respond_info(out|join("\n"))}
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_ADD]
+description = Add or change pressure advance settings
+gcode = 
+	{% if 'FILAMENT' not in params|upper %}
+	{action_respond_info("PRESSURE ADVANCE: FILAMENT must be defined use \"PRESSURE_ADVANCE_ADD FILAMENT=id\" as a minimum")}
+	{% else %}
+	{% set cfg = printer.configfile.settings.extruder %}
+	{% set id = params.FILAMENT|string %}
+	{% set nozzle = params.NOZZLE|default(0.40)|float|round(2) %}
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: Initialize with Filament %s" % (id))}
+	{% set pa_dic = [{'id' : id,
+	'val': [{'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}]}] %}
+	{% else %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% set id_index = loop.index0 %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{% set change_txt = [] %}
+	{% if 'PRESSURE_ADVANCE' in params|upper %}
+	{% set _dummy = change_txt.append("PRESSURE ADVANCE") %}
+	{% set _dummy = pa_dic[id_index].val[loop.index0].update({'pa': params.PRESSURE_ADVANCE|float|round(3)}) %}
+	{% endif %}
+	{% if 'SMOOTH_TIME' in params|upper %}
+	{% set _dummy = change_txt.append("SMOOTH TIME") %}
+	{% set _dummy = pa_dic[id_index].val[loop.index0].update({'st': params.SMOOTH_TIME|float|round(3)}) %}
+	{% endif %}
+	{% if change_txt|length > 0 %}
+	{action_respond_info("PRESSURE ADVANCE: Changed %s at Filament %s Nozzle %s" % (change_txt|join(" and "),id,nozzle))}
+	{% else %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing changed at Filament %s Nozzle %s" % (id,nozzle))}
+	{% endif %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Add setup for Nozzle %s at Filament %s" % (nozzle,id))}
+	{% set _dummy = pa_dic[id_index].val.append({'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}) %}
+	{% endif%}
+	{% endfor %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Add setup for Filament %s" % (id))}
+	{% set _dummy = pa_dic.append({'id' : id,
+	'val': [{'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}]}) %}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	SAVE_VARIABLE VARIABLE=pressure_advance VALUE="{pa_dic}"
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_REMOVE]
+description = Remove a filament or a nezzle setup
+gcode = 
+	{% if 'FILAMENT' not in params|upper %}
+	{action_respond_info("PRESSURE ADVANCE: FILAMENT must be defined use \"PRESSURE_ADVANCE_REMOVE FILAMENT=id\" as a minimum")}
+	{% else %}
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, no save_variable defined yet")}
+	{% else %}
+	{% set id = params.FILAMENT|string %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% if 'NOZZLE' in params|upper %}
+	{% set nozzle = params.NOZZLE|float|round(2) %}
+	{% set id_index = loop.index0 %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{action_respond_info("PRESSURE ADVANCE: Remove Nozzle %s at Filament %s" % (nozzle,id))}
+	{% set _dummy = pa_dic[id_index].val.pop(loop.index0) %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, Nozzle %s at Filament %s not defined" % (nozzle,id))}
+	{% endif%}
+	{% endfor %}
+	{% else %}
+	{action_respond_info("PRESSURE ADVANCE: Remove Filament %s" % id)}
+	{% set _dummy = pa_dic.pop(loop.index0) %}
+	{% endif %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, Filament %s not defined" % id)}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	SAVE_VARIABLE VARIABLE=pressure_advance VALUE="{pa_dic}"
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_SELECT]
+description = Set PA depending on nozzle and filament
+gcode = 
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: No filament defined ABORDED")}
+	{% else %}
+	{% set nozzle = params.NOZZLE|default(0.4)|float %}
+	{% set id = params.FILAMENT|default('None')|string %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% set found = {'id'    : 'default',
+	'nozzle': 0.4,
+	'pa'    : printer.configfile.settings.extruder.pressure_advance,
+	'st'    : printer.configfile.settings.extruder.pressure_advance_smooth_time} %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{% set _dummy = found.update({'id': filament.id}) %}
+	{% set _dummy = found.update({'nozzle': setup.nozzle}) %}
+	{% set _dummy = found.update({'pa': setup.pa}) %}
+	{% set _dummy = found.update({'st': setup.st}) %}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	{% endfor %}
+	SET_PRESSURE_ADVANCE ADVANCE={found.pa} SMOOTH_TIME={found.st}
+	{action_respond_info("PRESSURE ADVANCE:
+	Filament: %s   Nozzle: %1.02f
+	Pressure Advance: %1.03f Smooth Time: %1.03f" % (found.id, found.nozzle, found.pa, found.st))}
+	{% endif %}
+
+[gcode_macro TEST_SPEED]
+gcode = 
+	
+	{% set speed  = params.SPEED|default(printer.configfile.settings.printer.max_velocity)|int %}
+	
+	{% set iterations = params.ITERATIONS|default(5)|int %}
+	
+	{% set accel  = params.ACCEL|default(printer.configfile.settings.printer.max_accel)|int %}
+	
+	{% set bound = params.BOUND|default(20)|int %}
+	
+	{% set smallpatternsize = SMALLPATTERNSIZE|default(20)|int %}
+	
+	
+	
+	{% set x_min = printer.toolhead.axis_minimum.x + bound %}
+	{% set x_max = printer.toolhead.axis_maximum.x - bound %}
+	{% set y_min = printer.toolhead.axis_minimum.y + bound %}
+	{% set y_max = printer.toolhead.axis_maximum.y - bound %}
+	
+	
+	
+	{% set x_center = (printer.toolhead.axis_minimum.x|float + printer.toolhead.axis_maximum.x|float ) / 2 %}
+	{% set y_center = (printer.toolhead.axis_minimum.y|float + printer.toolhead.axis_maximum.y|float ) / 2 %}
+	
+	
+	{% set x_center_min = x_center - (smallpatternsize/2) %}
+	{% set x_center_max = x_center + (smallpatternsize/2) %}
+	{% set y_center_min = y_center - (smallpatternsize/2) %}
+	{% set y_center_max = y_center + (smallpatternsize/2) %}
+	
+	
+	SAVE_GCODE_STATE NAME=TEST_SPEED
+	
+	
+	{ action_respond_info("TEST_SPEED: starting %d iterations at speed %d, accel %d" % (iterations, speed, accel)) }
+	
+	
+	G28
+	
+	{% if printer.configfile.settings.quad_gantry_level %}
+	{% if printer.quad_gantry_level.applied == False %}
+	QUAD_GANTRY_LEVEL
+	G28 Z
+	{% endif %}
+	{% endif %}
+	
+	G90
+	G1 X{printer.toolhead.axis_maximum.x-50} Y{printer.toolhead.axis_maximum.y-50} F{30*60}
+	G28 X Y
+	G0 X{printer.toolhead.axis_maximum.x-1} Y{printer.toolhead.axis_maximum.y-1} F{30*60}
+	G4 P1000
+	GET_POSITION
+	
+	
+	G0 X{x_min} Y{y_min} Z{bound + 10} F{speed*60}
+	
+	
+	SET_VELOCITY_LIMIT VELOCITY={speed} ACCEL={accel} ACCEL_TO_DECEL={accel / 2}
+	
+	{% for i in range(iterations) %}
+	
+	
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_max} Y{y_max} F{speed*60}
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	G0 X{x_min} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	
+	
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_min} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	
+	
+	
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_max} Y{y_center_max} F{speed*60}
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	G0 X{x_center_min} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	
+	
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_min} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	{% endfor %}
+	
+	
+	SET_VELOCITY_LIMIT VELOCITY={printer.configfile.settings.printer.max_velocity} ACCEL={printer.configfile.settings.printer.max_accel} ACCEL_TO_DECEL={printer.configfile.settings.printer.max_accel_to_decel}
+	
+	
+	G28
+	
+	G90
+	G0 X{printer.toolhead.axis_maximum.x-1} Y{printer.toolhead.axis_maximum.y-1} F{30*60}
+	G4 P1000
+	GET_POSITION
+	
+	
+	RESTORE_GCODE_STATE NAME=TEST_SPEED
+
+[save_variables]
+filename = ~/printer_data/config/.variables.stb
+
+[virtual_sdcard]
+path = ~/printer_data/gcodes
+
+[mcu]
+serial = /dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00
+
+[stepper_x]
+step_pin = PB13
+dir_pin = PB12
+enable_pin = !PB14
+rotation_distance = 40
+microsteps = 16
+endstop_pin = PC0
+position_endstop = 118
+position_max = 118
+homing_speed = 20
+homing_retract_dist = 5
+homing_positive_dir = true
+
+[tmc2209 stepper_x]
+uart_pin = PB15
+interpolate = true
+run_current = 0.5
+sense_resistor = 0.110
+stealthchop_threshold = 500
+
+[stepper_y]
+step_pin = PB10
+dir_pin = PB2
+enable_pin = !PB11
+rotation_distance = 40
+microsteps = 16
+endstop_pin = PC1
+position_endstop = 120
+position_max = 120
+homing_speed = 20
+homing_retract_dist = 5
+homing_positive_dir = true
+
+[tmc2209 stepper_y]
+uart_pin = PC6
+interpolate = true
+run_current = 0.5
+sense_resistor = 0.110
+stealthchop_threshold = 500
+
+[stepper_z]
+step_pin = PB0
+dir_pin = !PC5
+enable_pin = !PB1
+rotation_distance = 8
+microsteps = 16
+endstop_pin = PC2
+position_endstop = -0.180
+position_max = 120
+position_min = -1
+homing_speed = 10
+second_homing_speed = 3.0
+homing_retract_dist = 3.0
+
+[tmc2209 stepper_z]
+uart_pin = PC10
+interpolate = false
+run_current = 0.600
+sense_resistor = 0.110
+stealthchop_threshold = 0
+
+[extruder]
+step_pin = PB3
+dir_pin = PB4
+enable_pin = !PD2
+rotation_distance = 13.1544
+gear_ratio = 50:17
+microsteps = 16
+nozzle_diameter = 0.400
+filament_diameter = 1.750
+heater_pin = PC8
+sensor_type = ATC Semitec 104GT-2
+sensor_pin = PA0
+control = pid
+pid_kp = 19.933
+pid_ki = 0.916
+pid_kd = 108.388
+min_temp = 0
+max_temp = 270
+min_extrude_temp = 0
+max_extrude_only_distance = 780.0
+max_extrude_cross_section = 50.0
+
+[tmc2209 extruder]
+uart_pin = PC11
+interpolate = false
+run_current = 0.4
+sense_resistor = 0.110
+stealthchop_threshold = 0
+
+[heater_bed]
+heater_pin = PC9
+sensor_type = ATC Semitec 104GT-2
+control = pid
+pid_kp = 30.821
+pid_ki = 0.430
+pid_kd = 552.458
+min_temp = 0
+max_temp = 200
+sensor_pin = PC3
+smooth_time = 3.0
+max_power = 0.5
+
+[printer]
+kinematics = corexy
+max_velocity = 500
+max_accel = 6000
+max_z_velocity = 15
+max_z_accel = 45
+square_corner_velocity = 6.0
+
+[fan]
+pin = PA8
+kick_start_time = 0.5
+off_below = 0.13
+cycle_time = 0.010
+
+[idle_timeout]
+timeout = 3600
+
+[homing_override]
+axes = z
+set_position_z = 0
+gcode = 
+	G90
+	G0 Z5 F600
+	G28 X Y
+	G0 X30 Y0 F3600
+	
+	G28 Z
+	G0 Z10 F1800
+	G0 X60 Y60 Z20 F3600
+=======================
+Loaded MCU 'mcu' 105 commands (v0.11.0-22-gfe0fc296 / gcc: (15:8-2019-q3-1+b1) 8.3.1 20190703 (release) [gcc-8-branch revision 273027] binutils: (2.35.2-2+14+b2) 2.35.2)
+MCU 'mcu' config: ADC_MAX=4095 BUS_PINS_i2c1=PB6,PB7 BUS_PINS_i2c1a=PB8,PB9 BUS_PINS_i2c2=PB10,PB11 BUS_PINS_spi1=PA6,PA7,PA5 BUS_PINS_spi1a=PB4,PB5,PB3 BUS_PINS_spi2=PB14,PB15,PB13 BUS_PINS_spi3=PB4,PB5,PB3 CLOCK_FREQ=72000000 INITIAL_PINS=!PC13 MCU=stm32f103xe PWM_MAX=255 RESERVE_PINS_USB=PA11,PA12 STATS_SUMSQ_BASE=256 STEPPER_BOTH_EDGE=1
+Configured MCU 'mcu' (1024 moves)
+Args: ['/home/pi/klipper/klippy/klippy.py', '/home/pi/printer_data/config/printer.cfg', '-I', '/home/pi/printer_data/comms/klippy.serial', '-l', '/home/pi/printer_data/logs/klippy.log', '-a', '/home/pi/printer_data/comms/klippy.sock']
+Git version: 'v0.11.0-22-gfe0fc296'
+CPU: 4 core ?
+Python: '3.9.2 (default, Feb 28 2021, 17:03:44) \n[GCC 10.2.1 20210110]'
+webhooks client 548574242944: {'program': 'Moonraker', 'version': 'v0.7.1-780-gdde9bcc'}
+=============== Log rollover at Sat Dec 17 21:06:20 2022 ===============
+MCU 'mcu' shutdown: ADC out of range
+clocksync state: mcu_freq=72000000 last_clock=12111784412098 clock_est=(169940.502 12109728459375 71998726.107) min_half_rtt=0.000160 min_rtt_time=166044.988 time_avg=169940.501(843.622) clock_avg=12109728459375.697(60739733246.534) pred_variance=1257124.600
+Dumping serial stats: bytes_write=3366456 bytes_read=20125718 bytes_retransmit=0 bytes_invalid=0 send_seq=212251 receive_seq=212251 retransmit_seq=0 srtt=0.001 rttvar=0.000 rto=0.025 ready_bytes=0 stalled_bytes=0
+Dumping send queue 100 messages
+Sent 0 169871.573201 169871.573201 6: seq: 17, get_clock
+Sent 1 169872.557897 169872.557897 6: seq: 18, get_clock
+Sent 2 169873.542300 169873.542300 6: seq: 19, get_clock
+Sent 3 169874.527032 169874.527032 6: seq: 1a, get_clock
+Sent 4 169875.512266 169875.512266 6: seq: 1b, get_clock
+Sent 5 169876.497353 169876.497353 6: seq: 1c, get_clock
+Sent 6 169877.482403 169877.482403 6: seq: 1d, get_clock
+Sent 7 169878.467610 169878.467610 6: seq: 1e, get_clock
+Sent 8 169879.452805 169879.452805 6: seq: 1f, get_clock
+Sent 9 169880.437955 169880.437955 6: seq: 10, get_clock
+Sent 10 169881.422818 169881.422818 6: seq: 11, get_clock
+Sent 11 169882.407662 169882.407662 6: seq: 12, get_clock
+Sent 12 169883.391824 169883.391824 6: seq: 13, get_clock
+Sent 13 169884.375933 169884.375933 6: seq: 14, get_clock
+Sent 14 169885.360527 169885.360527 6: seq: 15, get_clock
+Sent 15 169886.345550 169886.345550 6: seq: 16, get_clock
+Sent 16 169887.331360 169887.331360 6: seq: 17, get_clock
+Sent 17 169888.315634 169888.315634 6: seq: 18, get_clock
+Sent 18 169889.300384 169889.300384 6: seq: 19, get_clock
+Sent 19 169890.285276 169890.285276 6: seq: 1a, get_clock
+Sent 20 169891.270370 169891.270370 6: seq: 1b, get_clock
+Sent 21 169892.254788 169892.254788 6: seq: 1c, get_clock
+Sent 22 169893.239888 169893.239888 6: seq: 1d, get_clock
+Sent 23 169894.224655 169894.224655 6: seq: 1e, get_clock
+Sent 24 169895.208971 169895.208971 6: seq: 1f, get_clock
+Sent 25 169896.193412 169896.193412 6: seq: 10, get_clock
+Sent 26 169897.178169 169897.178169 6: seq: 11, get_clock
+Sent 27 169898.162803 169898.162803 6: seq: 12, get_clock
+Sent 28 169899.146870 169899.146870 6: seq: 13, get_clock
+Sent 29 169900.131204 169900.131204 6: seq: 14, get_clock
+Sent 30 169901.116351 169901.116351 6: seq: 15, get_clock
+Sent 31 169902.100894 169902.100894 6: seq: 16, get_clock
+Sent 32 169903.085724 169903.085724 6: seq: 17, get_clock
+Sent 33 169904.070175 169904.070175 6: seq: 18, get_clock
+Sent 34 169905.055306 169905.055306 6: seq: 19, get_clock
+Sent 35 169906.039695 169906.039695 6: seq: 1a, get_clock
+Sent 36 169907.024397 169907.024397 6: seq: 1b, get_clock
+Sent 37 169908.009481 169908.009481 6: seq: 1c, get_clock
+Sent 38 169908.993868 169908.993868 6: seq: 1d, get_clock
+Sent 39 169909.978774 169909.978774 6: seq: 1e, get_clock
+Sent 40 169910.963079 169910.963079 6: seq: 1f, get_clock
+Sent 41 169911.948091 169911.948091 6: seq: 10, get_clock
+Sent 42 169912.932530 169912.932530 6: seq: 11, get_clock
+Sent 43 169913.917798 169913.917798 6: seq: 12, get_clock
+Sent 44 169914.902280 169914.902280 6: seq: 13, get_clock
+Sent 45 169915.886530 169915.886530 6: seq: 14, get_clock
+Sent 46 169916.871549 169916.871549 6: seq: 15, get_clock
+Sent 47 169917.856447 169917.856447 6: seq: 16, get_clock
+Sent 48 169918.841460 169918.841460 6: seq: 17, get_clock
+Sent 49 169919.825803 169919.825803 6: seq: 18, get_clock
+Sent 50 169920.810081 169920.810081 6: seq: 19, get_clock
+Sent 51 169921.794359 169921.794359 6: seq: 1a, get_clock
+Sent 52 169922.778558 169922.778558 6: seq: 1b, get_clock
+Sent 53 169923.762815 169923.762815 6: seq: 1c, get_clock
+Sent 54 169924.747505 169924.747505 6: seq: 1d, get_clock
+Sent 55 169925.732083 169925.732083 6: seq: 1e, get_clock
+Sent 56 169926.716919 169926.716919 6: seq: 1f, get_clock
+Sent 57 169927.702033 169927.702033 6: seq: 10, get_clock
+Sent 58 169928.686497 169928.686497 6: seq: 11, get_clock
+Sent 59 169929.670829 169929.670829 6: seq: 12, get_clock
+Sent 60 169930.655346 169930.655346 6: seq: 13, get_clock
+Sent 61 169931.640162 169931.640162 6: seq: 14, get_clock
+Sent 62 169932.624529 169932.624529 6: seq: 15, get_clock
+Sent 63 169933.608818 169933.608818 6: seq: 16, get_clock
+Sent 64 169934.593423 169934.593423 6: seq: 17, get_clock
+Sent 65 169935.577766 169935.577766 6: seq: 18, get_clock
+Sent 66 169936.561926 169936.561926 6: seq: 19, get_clock
+Sent 67 169937.546719 169937.546719 6: seq: 1a, get_clock
+Sent 68 169938.531547 169938.531547 6: seq: 1b, get_clock
+Sent 69 169939.516392 169939.516392 6: seq: 1c, get_clock
+Sent 70 169940.501359 169940.501359 6: seq: 1d, get_clock
+Sent 71 169941.486251 169941.486251 6: seq: 1e, get_clock
+Sent 72 169942.470647 169942.470647 6: seq: 1f, get_clock
+Sent 73 169943.455715 169943.455715 6: seq: 10, get_clock
+Sent 74 169944.440273 169944.440273 6: seq: 11, get_clock
+Sent 75 169945.425234 169945.425234 6: seq: 12, get_clock
+Sent 76 169946.409704 169946.409704 6: seq: 13, get_clock
+Sent 77 169947.394362 169947.394362 6: seq: 14, get_clock
+Sent 78 169948.378996 169948.378996 6: seq: 15, get_clock
+Sent 79 169949.363405 169949.363405 6: seq: 16, get_clock
+Sent 80 169950.348175 169950.348175 6: seq: 17, get_clock
+Sent 81 169951.332744 169951.332744 6: seq: 18, get_clock
+Sent 82 169952.317340 169952.317340 6: seq: 19, get_clock
+Sent 83 169953.301998 169953.301998 6: seq: 1a, get_clock
+Sent 84 169954.286549 169954.286549 6: seq: 1b, get_clock
+Sent 85 169955.270937 169955.270937 6: seq: 1c, get_clock
+Sent 86 169956.255673 169956.255673 6: seq: 1d, get_clock
+Sent 87 169957.240141 169957.240141 6: seq: 1e, get_clock
+Sent 88 169958.224650 169958.224650 6: seq: 1f, get_clock
+Sent 89 169959.209492 169959.209492 6: seq: 10, get_clock
+Sent 90 169960.194457 169960.194457 6: seq: 11, get_clock
+Sent 91 169961.179184 169961.179184 6: seq: 12, get_clock
+Sent 92 169962.163844 169962.163844 6: seq: 13, get_clock
+Sent 93 169963.148773 169963.148773 6: seq: 14, get_clock
+Sent 94 169964.133527 169964.133527 6: seq: 15, get_clock
+Sent 95 169965.118455 169965.118455 6: seq: 16, get_clock
+Sent 96 169966.102745 169966.102745 6: seq: 17, get_clock
+Sent 97 169967.086970 169967.086970 6: seq: 18, get_clock
+Sent 98 169968.071581 169968.071581 6: seq: 19, get_clock
+Sent 99 169969.056766 169969.056766 6: seq: 1a, get_clock
+Dumping receive queue 100 messages
+Receive: 0 169957.036604 169956.255673 15: seq: 1e, analog_in_state oid=20 next_clock=3427192576 value=31530
+Receive: 1 169957.241666 169957.240141 11: seq: 1f, clock clock=3420822952
+Receive: 2 169957.276802 169957.240141 15: seq: 1f, analog_in_state oid=14 next_clock=3444472576 value=31497
+Receive: 3 169957.337037 169957.240141 15: seq: 1f, analog_in_state oid=20 next_clock=3448792576 value=31500
+Receive: 4 169957.577171 169957.240141 15: seq: 1f, analog_in_state oid=14 next_clock=3466072576 value=31492
+Receive: 5 169957.637201 169957.240141 15: seq: 1f, analog_in_state oid=20 next_clock=3470392576 value=31532
+Receive: 6 169957.877328 169957.240141 15: seq: 1f, analog_in_state oid=14 next_clock=3487672576 value=31496
+Receive: 7 169957.937428 169957.240141 15: seq: 1f, analog_in_state oid=20 next_clock=3491992576 value=31500
+Receive: 8 169958.176370 169957.240141 15: seq: 1f, analog_in_state oid=14 next_clock=3509272576 value=31491
+Receive: 9 169958.225186 169958.224650 11: seq: 10, clock clock=3491705678
+Receive: 10 169958.236522 169958.224650 15: seq: 10, analog_in_state oid=20 next_clock=3513592576 value=31539
+Receive: 11 169958.476738 169958.224650 15: seq: 10, analog_in_state oid=14 next_clock=3530872576 value=31489
+Receive: 12 169958.536862 169958.224650 15: seq: 10, analog_in_state oid=20 next_clock=3535192576 value=31530
+Receive: 13 169958.776984 169958.224650 15: seq: 10, analog_in_state oid=14 next_clock=3552472576 value=31490
+Receive: 14 169958.837158 169958.224650 15: seq: 10, analog_in_state oid=20 next_clock=3556792576 value=31507
+Receive: 15 169959.077304 169958.224650 15: seq: 10, analog_in_state oid=14 next_clock=3574072576 value=31487
+Receive: 16 169959.137278 169958.224650 15: seq: 10, analog_in_state oid=20 next_clock=3578392576 value=31505
+Receive: 17 169959.211127 169959.209492 11: seq: 11, clock clock=3562612486
+Receive: 18 169959.377585 169959.209492 15: seq: 11, analog_in_state oid=14 next_clock=3595672576 value=31491
+Receive: 19 169959.436376 169959.209492 15: seq: 11, analog_in_state oid=20 next_clock=3599992576 value=31537
+Receive: 20 169959.676569 169959.209492 15: seq: 11, analog_in_state oid=14 next_clock=3617272576 value=31479
+Receive: 21 169959.736629 169959.209492 15: seq: 11, analog_in_state oid=20 next_clock=3621592576 value=31528
+Receive: 22 169959.976867 169959.209492 15: seq: 11, analog_in_state oid=14 next_clock=3638872576 value=31498
+Receive: 23 169960.036947 169959.209492 15: seq: 11, analog_in_state oid=20 next_clock=3643192576 value=31533
+Receive: 24 169960.195761 169960.194457 11: seq: 12, clock clock=3633529804
+Receive: 25 169960.277173 169960.194457 15: seq: 12, analog_in_state oid=14 next_clock=3660472576 value=31487
+Receive: 26 169960.337360 169960.194457 15: seq: 12, analog_in_state oid=20 next_clock=3664792576 value=31529
+Receive: 27 169960.577500 169960.194457 15: seq: 12, analog_in_state oid=14 next_clock=3682072576 value=31498
+Receive: 28 169960.637592 169960.194457 15: seq: 12, analog_in_state oid=20 next_clock=3686392576 value=31536
+Receive: 29 169960.830332 169960.194457 14: seq: 12, stats count=170 sum=140777 sumsq=668496
+Receive: 30 169960.876565 169960.194457 15: seq: 12, analog_in_state oid=14 next_clock=3703672576 value=31500
+Receive: 31 169960.936709 169960.194457 15: seq: 12, analog_in_state oid=20 next_clock=3707992576 value=31507
+Receive: 32 169961.176897 169960.194457 15: seq: 12, analog_in_state oid=14 next_clock=3725272576 value=31493
+Receive: 33 169961.180654 169961.179184 11: seq: 13, clock clock=3704430812
+Receive: 34 169961.237033 169961.179184 15: seq: 13, analog_in_state oid=20 next_clock=3729592576 value=31495
+Receive: 35 169961.477206 169961.179184 15: seq: 13, analog_in_state oid=14 next_clock=3746872576 value=31489
+Receive: 36 169961.537258 169961.179184 15: seq: 13, analog_in_state oid=20 next_clock=3751192576 value=31541
+Receive: 37 169961.777453 169961.179184 15: seq: 13, analog_in_state oid=14 next_clock=3768472576 value=31494
+Receive: 38 169961.837666 169961.179184 15: seq: 13, analog_in_state oid=20 next_clock=3772792576 value=31533
+Receive: 39 169962.076463 169961.179184 15: seq: 13, analog_in_state oid=14 next_clock=3790072576 value=31494
+Receive: 40 169962.136608 169961.179184 15: seq: 13, analog_in_state oid=20 next_clock=3794392576 value=31500
+Receive: 41 169962.165410 169962.163844 11: seq: 14, clock clock=3775322552
+Receive: 42 169962.376902 169962.163844 15: seq: 14, analog_in_state oid=14 next_clock=3811672576 value=31494
+Receive: 43 169962.436895 169962.163844 15: seq: 14, analog_in_state oid=20 next_clock=3815992576 value=31503
+Receive: 44 169962.677130 169962.163844 15: seq: 14, analog_in_state oid=14 next_clock=3833272576 value=31488
+Receive: 45 169962.737172 169962.163844 15: seq: 14, analog_in_state oid=20 next_clock=3837592576 value=31534
+Receive: 46 169962.977338 169962.163844 15: seq: 14, analog_in_state oid=14 next_clock=3854872576 value=31495
+Receive: 47 169963.037493 169962.163844 15: seq: 14, analog_in_state oid=20 next_clock=3859192576 value=31535
+Receive: 48 169963.150046 169963.148773 11: seq: 15, clock clock=3846236732
+Receive: 49 169963.276438 169963.148773 15: seq: 15, analog_in_state oid=14 next_clock=3876472576 value=31489
+Receive: 50 169963.336675 169963.148773 15: seq: 15, analog_in_state oid=20 next_clock=3880792576 value=31494
+Receive: 51 169963.576742 169963.148773 15: seq: 15, analog_in_state oid=14 next_clock=3898072576 value=31494
+Receive: 52 169963.636875 169963.148773 15: seq: 15, analog_in_state oid=20 next_clock=3902392576 value=31495
+Receive: 53 169963.877027 169963.148773 15: seq: 15, analog_in_state oid=14 next_clock=3919672576 value=31495
+Receive: 54 169963.937039 169963.148773 15: seq: 15, analog_in_state oid=20 next_clock=3923992576 value=31500
+Receive: 55 169964.134669 169964.133527 11: seq: 16, clock clock=3917138628
+Receive: 56 169964.177292 169964.133527 15: seq: 16, analog_in_state oid=14 next_clock=3941272576 value=31493
+Receive: 57 169964.237411 169964.133527 15: seq: 16, analog_in_state oid=20 next_clock=3945592576 value=31525
+Receive: 58 169964.477546 169964.133527 15: seq: 16, analog_in_state oid=14 next_clock=3962872576 value=31493
+Receive: 59 169964.536386 169964.133527 15: seq: 16, analog_in_state oid=20 next_clock=3967192576 value=31495
+Receive: 60 169964.776612 169964.133527 15: seq: 16, analog_in_state oid=14 next_clock=3984472576 value=31494
+Receive: 61 169964.836657 169964.133527 15: seq: 16, analog_in_state oid=20 next_clock=3988792576 value=31544
+Receive: 62 169965.076851 169964.133527 15: seq: 16, analog_in_state oid=14 next_clock=4006072576 value=31495
+Receive: 63 169965.119463 169965.118455 11: seq: 17, clock clock=3988052038
+Receive: 64 169965.137034 169965.118455 15: seq: 17, analog_in_state oid=20 next_clock=4010392576 value=31527
+Receive: 65 169965.377251 169965.118455 15: seq: 17, analog_in_state oid=14 next_clock=4027672576 value=31483
+Receive: 66 169965.437440 169965.118455 15: seq: 17, analog_in_state oid=20 next_clock=4031992576 value=31542
+Receive: 67 169965.677480 169965.118455 15: seq: 17, analog_in_state oid=14 next_clock=4049272576 value=31483
+Receive: 68 169965.737537 169965.118455 15: seq: 17, analog_in_state oid=20 next_clock=4053592576 value=31495
+Receive: 69 169965.930240 169965.118455 14: seq: 17, stats count=170 sum=140777 sumsq=668496
+Receive: 70 169965.976528 169965.118455 15: seq: 17, analog_in_state oid=14 next_clock=4070872576 value=31486
+Receive: 71 169966.036708 169965.118455 15: seq: 17, analog_in_state oid=20 next_clock=4075192576 value=31500
+Receive: 72 169966.104353 169966.102745 11: seq: 18, clock clock=4058920080
+Receive: 73 169966.276970 169966.102745 15: seq: 18, analog_in_state oid=14 next_clock=4092472576 value=31494
+Receive: 74 169966.337263 169966.102745 15: seq: 18, analog_in_state oid=20 next_clock=4096792576 value=31531
+Receive: 75 169966.577209 169966.102745 15: seq: 18, analog_in_state oid=14 next_clock=4114072576 value=31482
+Receive: 76 169966.637463 169966.102745 15: seq: 18, analog_in_state oid=20 next_clock=4118392576 value=31505
+Receive: 77 169966.877532 169966.102745 15: seq: 18, analog_in_state oid=14 next_clock=4135672576 value=31482
+Receive: 78 169966.937542 169966.102745 15: seq: 18, analog_in_state oid=20 next_clock=4139992576 value=31541
+Receive: 79 169967.087663 169967.086970 11: seq: 19, clock clock=4129781518
+Receive: 80 169967.176607 169967.086970 15: seq: 19, analog_in_state oid=14 next_clock=4157272576 value=31493
+Receive: 81 169967.236659 169967.086970 15: seq: 19, analog_in_state oid=20 next_clock=4161592576 value=31504
+Receive: 82 169967.476831 169967.086970 15: seq: 19, analog_in_state oid=14 next_clock=4178872576 value=31488
+Receive: 83 169967.536969 169967.086970 15: seq: 19, analog_in_state oid=20 next_clock=4183192576 value=31535
+Receive: 84 169967.777103 169967.086970 15: seq: 19, analog_in_state oid=14 next_clock=4200472576 value=31503
+Receive: 85 169967.837164 169967.086970 15: seq: 19, analog_in_state oid=20 next_clock=4204792576 value=31504
+Receive: 86 169968.072317 169968.071581 11: seq: 1a, clock clock=4200672998
+Receive: 87 169968.077430 169968.071581 15: seq: 1a, analog_in_state oid=14 next_clock=4222072576 value=31469
+Receive: 88 169968.137665 169968.071581 15: seq: 1a, analog_in_state oid=20 next_clock=4226392576 value=31537
+Receive: 89 169968.377762 169968.071581 14: seq: 1a, analog_in_state oid=14 next_clock=4243672576 value=31492
+Receive: 90 169968.436596 169968.071581 14: seq: 1a, analog_in_state oid=20 next_clock=4247992576 value=31540
+Receive: 91 169968.676767 169968.071581 14: seq: 1a, analog_in_state oid=14 next_clock=4265272576 value=31486
+Receive: 92 169968.736844 169968.071581 14: seq: 1a, analog_in_state oid=20 next_clock=4269592576 value=32738
+Receive: 93 169968.976957 169968.071581 14: seq: 1a, analog_in_state oid=14 next_clock=4286872576 value=31498
+Receive: 94 169969.037092 169968.071581 14: seq: 1a, analog_in_state oid=20 next_clock=4291192576 value=32749
+Receive: 95 169969.058497 169969.056766 10: seq: 1b, clock clock=4271604674
+Receive: 96 169969.277331 169969.056766 14: seq: 1b, analog_in_state oid=14 next_clock=13505280 value=31499
+Receive: 97 169969.337425 169969.056766 14: seq: 1b, analog_in_state oid=20 next_clock=17825280 value=32747
+Receive: 98 169969.577584 169969.056766 14: seq: 1b, analog_in_state oid=14 next_clock=35105280 value=31495
+Receive: 99 169969.637754 169969.056766 11: seq: 1b, shutdown clock=18341035 static_string_id=ADC out of range
+Transition to shutdown state: MCU 'mcu' shutdown: ADC out of range
+This generally occurs when a heater temperature exceeds
+its configured min_temp or max_temp.
+Dumping gcode input 0 blocks
+Dumping 20 requests for client 548574242944
+Received 46438.285766: b'{"id": 548033956688, "method": "info", "params": {}}'
+Received 46438.288284: b'{"id": 548062354880, "method": "objects/query", "params": {"objects": {"print_stats": null}}}'
+Received 46438.288964: b'{"id": 548034240576, "method": "objects/list", "params": {}}'
+Received 46438.437729: b'{"id": 548033957456, "method": "objects/subscribe", "params": {"objects": {"webhooks": null, "print_stats": null, "heater_bed": null, "extruder": null, "configfile": null, "mcu": null, "pause_resume": null, "display_status": null, "bed_screws": null, "save_variables": null, "gcode_move": null, "virtual_sdcard": null, "tmc2209 stepper_x": null, "tmc2209 stepper_y": null, "tmc2209 stepper_z": null, "tmc2209 extruder": null, "heaters": null, "fan": null, "idle_timeout": null, "motion_report": null, "query_endstops": null, "system_stats": null, "manual_probe": null, "toolhead": null}, "response_template": {"method": "process_status_update"}}}'
+Received 46438.654103: b'{"id": 548034243696, "method": "gcode/help", "params": {}}'
+Received 54618.026053: b'{"id": 548016899504, "method": "info", "params": {}}'
+Received 54618.030323: b'{"id": 548016898880, "method": "objects/query", "params": {"objects": {"print_stats": null}}}'
+Received 54618.031342: b'{"id": 548016898976, "method": "objects/list", "params": {}}'
+Received 54618.152470: b'{"id": 548061891264, "method": "objects/subscribe", "params": {"objects": {"webhooks": null, "print_stats": null, "heater_bed": null, "extruder": null, "configfile": null, "mcu": null, "pause_resume": null, "display_status": null, "bed_screws": null, "save_variables": null, "gcode_move": null, "virtual_sdcard": null, "tmc2209 stepper_x": null, "tmc2209 stepper_y": null, "tmc2209 stepper_z": null, "tmc2209 extruder": null, "heaters": null, "fan": null, "idle_timeout": null, "motion_report": null, "query_endstops": null, "system_stats": null, "manual_probe": null, "toolhead": null}, "response_template": {"method": "process_status_update"}}}'
+Received 54618.557028: b'{"id": 548061890688, "method": "gcode/help", "params": {}}'
+Received 61212.666260: b'{"id": 548033941760, "method": "info", "params": {}}'
+Received 61212.672510: b'{"id": 548034615904, "method": "objects/query", "params": {"objects": {"print_stats": null}}}'
+Received 61212.673387: b'{"id": 548062354448, "method": "objects/list", "params": {}}'
+Received 61212.817709: b'{"id": 548034615904, "method": "objects/subscribe", "params": {"objects": {"webhooks": null, "print_stats": null, "heater_bed": null, "extruder": null, "configfile": null, "mcu": null, "pause_resume": null, "display_status": null, "bed_screws": null, "save_variables": null, "gcode_move": null, "virtual_sdcard": null, "tmc2209 stepper_x": null, "tmc2209 stepper_y": null, "tmc2209 stepper_z": null, "tmc2209 extruder": null, "heaters": null, "fan": null, "idle_timeout": null, "motion_report": null, "query_endstops": null, "system_stats": null, "manual_probe": null, "toolhead": null}, "response_template": {"method": "process_status_update"}}}'
+Received 61213.229671: b'{"id": 548034617296, "method": "gcode/help", "params": {}}'
+Received 127358.699179: b'{"id": 548033956448, "method": "info", "params": {}}'
+Received 127358.705705: b'{"id": 548034617200, "method": "objects/query", "params": {"objects": {"print_stats": null}}}'
+Received 127358.706620: b'{"id": 548034240864, "method": "objects/list", "params": {}}'
+Received 127358.928089: b'{"id": 548034616000, "method": "objects/subscribe", "params": {"objects": {"webhooks": null, "print_stats": null, "heater_bed": null, "extruder": null, "configfile": null, "mcu": null, "pause_resume": null, "display_status": null, "bed_screws": null, "save_variables": null, "gcode_move": null, "virtual_sdcard": null, "tmc2209 stepper_x": null, "tmc2209 stepper_y": null, "tmc2209 stepper_z": null, "tmc2209 extruder": null, "heaters": null, "fan": null, "idle_timeout": null, "motion_report": null, "query_endstops": null, "system_stats": null, "manual_probe": null, "toolhead": null}, "response_template": {"method": "process_status_update"}}}'
+Received 127359.560250: b'{"id": 548034616240, "method": "gcode/help", "params": {}}'
+gcode state: absolute_coord=True absolute_extrude=False base_position=[0.0, 0.0, -0.03, 451.1227200000211] last_position=[63.815, 69.715, 1.49, 451.252640000021] homing_position=[0.0, 0.0, -0.03, 0.0] speed_factor=0.016666666666666666 extrude_factor=1.0 speed=200.0
+Reactor garbage collection: (54618.367108175, 0.0, 0.0)
+Requested toolhead position at shutdown time 168219.807163: (63.815, 69.715, 1.49)
+Starting Klippy...
+Args: ['/home/pi/klipper/klippy/klippy.py', '/home/pi/printer_data/config/printer.cfg', '-I', '/home/pi/printer_data/comms/klippy.serial', '-l', '/home/pi/printer_data/logs/klippy.log', '-a', '/home/pi/printer_data/comms/klippy.sock']
+Git version: 'v0.11.0-22-gfe0fc296'
+CPU: 4 core ?
+Python: '3.9.2 (default, Feb 28 2021, 17:03:44) \n[GCC 10.2.1 20210110]'
+Start printer at Sat Dec 17 20:36:21 2022 (1671338181.2 30.5)
+===== Config file =====
+[pause_resume]
+
+[display_status]
+
+[gcode_macro START_PRINT]
+gcode = 
+	CLEAR_PAUSE
+	M117 Print Starting...
+	{% set T_BED = params.T_BED|default(190)|float %}
+	{% set T_EXTRUDER = params.T_EXTRUDER|default(60)|float %}
+	M109 S{T_EXTRUDER}
+	M190 S{T_BED}
+	M117 Homing All...
+	G28
+	G92 E0
+	G90
+	G92 E0
+	G1 X15 Y10 Z5 F6000
+	M117 Waiting for Temps
+	M190 S{T_BED}
+	M109 S{T_EXTRUDER}
+	PRIME_LINE
+	M117 Printing.....
+
+[gcode_macro END_PRINT]
+gcode = 
+	SAVE_GCODE_STATE NAME=end_print
+	M117 Done printing
+	G91
+	G1 E-10 F3600
+	G1 Z50
+	G4 P1000
+	G90
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	
+	{% set x_max = printer.toolhead.axis_minimum.x|float + 25.0 %}
+	{% set y_max = printer.toolhead.axis_minimum.y|float + 25.0 %}
+	G1 X{x_max} Y{y_max} F2000
+	
+	M104 S0
+	M140 S0
+	RESTORE_GCODE_STATE NAME=end_print
+	M84
+
+[gcode_macro PRIME_LINE]
+gcode = 
+	M117 Prime Line
+	G92 E0
+	
+	G1 Z2.0 F3000
+	
+	G1 X2 Y2 Z2.28 F5000
+	G1 X2 Y50 Z2.28 F500 E15
+	G1 X3 Y50 Z2.28 F5000
+	G1 X3 Y5 Z2.28 F500 E30
+	G92 E0
+	G1 Z2.0 F3000
+
+[gcode_macro M205]
+gcode = 
+	{% if 'X' in params %}
+	SET_VELOCITY_LIMIT SQUARE_CORNER_VELOCITY={ X }
+	{% endif %}
+
+[gcode_macro M600]
+gcode = 
+	{% set X = params.X|default(50)|float %}
+	{% set Y = params.Y|default(0)|float %}
+	{% set Z = params.Z|default(10)|float %}
+	SAVE_GCODE_STATE NAME=M600_state
+	PAUSE
+	G91
+	G1 E-.8 F2700
+	G1 Z{Z}
+	G90
+	G1 X{X} Y{Y} F3000
+	G91
+	G1 E-50 F1000
+	SET_IDLE_TIMEOUT TIMEOUT=86400
+	M117 Paused
+	RESTORE_GCODE_STATE NAME=M600_state
+
+[gcode_macro LOAD]
+gcode = 
+	SAVE_GCODE_STATE NAME=loading_filament
+	M83
+	G92 E0.0
+	G1 E40 F500
+	G1 E40 F100
+	G92 E0.0
+	RESTORE_GCODE_STATE NAME=loading_filament
+
+[gcode_macro UNLOAD]
+gcode = 
+	SAVE_GCODE_STATE NAME=unloading_filament
+	G91
+	G1 E10 F100
+	G92 E0.0
+	G1 E-50 F1000
+	G92 E0.0
+	RESTORE_GCODE_STATE NAME=unloading_filament
+
+[gcode_macro CANCEL_PRINT]
+rename_existing = BASE_CANCEL_PRINT
+gcode = 
+	TURN_OFF_HEATERS
+	CLEAR_PAUSE
+	SDCARD_RESET_FILE
+	BASE_CANCEL_PRINT
+
+[bed_screws]
+screw1 = 60,5
+screw1_name = front screw
+screw2 = 5,115
+screw2_name = back left
+screw3 = 115,115
+screw3_name = back right
+
+[gcode_macro PRESSURE_ADVANCE_LIST]
+description = List all filament pressure advance settings
+gcode = 
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: No filament defined ABORDED")}
+	{% else %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% set out = ["PRESSURE ADVANCE: Defined filaments"] %}
+	{% for filament in pa_dic|sort(attribute='id') %}
+	{% set _dummy = out.append("%s" % filament.id) %}
+	{% for setup in filament.val|sort(attribute='nozzle') %}
+	{% set _dummy = out.append("Nozzle: %1.02f | Pressure Advance: %1.03f | Smooth Time: %1.03f" %
+	(setup.nozzle, setup.pa, setup.st)) %}
+	{% endfor %}
+	{% endfor %}
+	{action_respond_info(out|join("\n"))}
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_ADD]
+description = Add or change pressure advance settings
+gcode = 
+	{% if 'FILAMENT' not in params|upper %}
+	{action_respond_info("PRESSURE ADVANCE: FILAMENT must be defined use \"PRESSURE_ADVANCE_ADD FILAMENT=id\" as a minimum")}
+	{% else %}
+	{% set cfg = printer.configfile.settings.extruder %}
+	{% set id = params.FILAMENT|string %}
+	{% set nozzle = params.NOZZLE|default(0.40)|float|round(2) %}
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: Initialize with Filament %s" % (id))}
+	{% set pa_dic = [{'id' : id,
+	'val': [{'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}]}] %}
+	{% else %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% set id_index = loop.index0 %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{% set change_txt = [] %}
+	{% if 'PRESSURE_ADVANCE' in params|upper %}
+	{% set _dummy = change_txt.append("PRESSURE ADVANCE") %}
+	{% set _dummy = pa_dic[id_index].val[loop.index0].update({'pa': params.PRESSURE_ADVANCE|float|round(3)}) %}
+	{% endif %}
+	{% if 'SMOOTH_TIME' in params|upper %}
+	{% set _dummy = change_txt.append("SMOOTH TIME") %}
+	{% set _dummy = pa_dic[id_index].val[loop.index0].update({'st': params.SMOOTH_TIME|float|round(3)}) %}
+	{% endif %}
+	{% if change_txt|length > 0 %}
+	{action_respond_info("PRESSURE ADVANCE: Changed %s at Filament %s Nozzle %s" % (change_txt|join(" and "),id,nozzle))}
+	{% else %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing changed at Filament %s Nozzle %s" % (id,nozzle))}
+	{% endif %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Add setup for Nozzle %s at Filament %s" % (nozzle,id))}
+	{% set _dummy = pa_dic[id_index].val.append({'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}) %}
+	{% endif%}
+	{% endfor %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Add setup for Filament %s" % (id))}
+	{% set _dummy = pa_dic.append({'id' : id,
+	'val': [{'nozzle': nozzle,
+	'pa'    : params.PRESSURE_ADVANCE|default(cfg.pressure_advance)|float|round(3),
+	'st'    : params.SMOOTH_TIME|default(cfg.pressure_advance_smooth_time)|float|round(3)}]}) %}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	SAVE_VARIABLE VARIABLE=pressure_advance VALUE="{pa_dic}"
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_REMOVE]
+description = Remove a filament or a nezzle setup
+gcode = 
+	{% if 'FILAMENT' not in params|upper %}
+	{action_respond_info("PRESSURE ADVANCE: FILAMENT must be defined use \"PRESSURE_ADVANCE_REMOVE FILAMENT=id\" as a minimum")}
+	{% else %}
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, no save_variable defined yet")}
+	{% else %}
+	{% set id = params.FILAMENT|string %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% if 'NOZZLE' in params|upper %}
+	{% set nozzle = params.NOZZLE|float|round(2) %}
+	{% set id_index = loop.index0 %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{action_respond_info("PRESSURE ADVANCE: Remove Nozzle %s at Filament %s" % (nozzle,id))}
+	{% set _dummy = pa_dic[id_index].val.pop(loop.index0) %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, Nozzle %s at Filament %s not defined" % (nozzle,id))}
+	{% endif%}
+	{% endfor %}
+	{% else %}
+	{action_respond_info("PRESSURE ADVANCE: Remove Filament %s" % id)}
+	{% set _dummy = pa_dic.pop(loop.index0) %}
+	{% endif %}
+	{% elif loop.last %}
+	{action_respond_info("PRESSURE ADVANCE: Nothing to remove, Filament %s not defined" % id)}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	SAVE_VARIABLE VARIABLE=pressure_advance VALUE="{pa_dic}"
+	{% endif %}
+
+[gcode_macro PRESSURE_ADVANCE_SELECT]
+description = Set PA depending on nozzle and filament
+gcode = 
+	{% if not printer.save_variables.variables.pressure_advance %}
+	{action_respond_info("PRESSURE ADVANCE: No filament defined ABORDED")}
+	{% else %}
+	{% set nozzle = params.NOZZLE|default(0.4)|float %}
+	{% set id = params.FILAMENT|default('None')|string %}
+	{% set pa_dic = printer.save_variables.variables.pressure_advance %}
+	{% set found = {'id'    : 'default',
+	'nozzle': 0.4,
+	'pa'    : printer.configfile.settings.extruder.pressure_advance,
+	'st'    : printer.configfile.settings.extruder.pressure_advance_smooth_time} %}
+	{% for filament in pa_dic %}
+	{% if id == filament.id %}
+	{% for setup in filament.val %}
+	{% if nozzle == setup.nozzle %}
+	{% set _dummy = found.update({'id': filament.id}) %}
+	{% set _dummy = found.update({'nozzle': setup.nozzle}) %}
+	{% set _dummy = found.update({'pa': setup.pa}) %}
+	{% set _dummy = found.update({'st': setup.st}) %}
+	{% endif %}
+	{% endfor %}
+	{% endif %}
+	{% endfor %}
+	SET_PRESSURE_ADVANCE ADVANCE={found.pa} SMOOTH_TIME={found.st}
+	{action_respond_info("PRESSURE ADVANCE:
+	Filament: %s   Nozzle: %1.02f
+	Pressure Advance: %1.03f Smooth Time: %1.03f" % (found.id, found.nozzle, found.pa, found.st))}
+	{% endif %}
+
+[gcode_macro TEST_SPEED]
+gcode = 
+	
+	{% set speed  = params.SPEED|default(printer.configfile.settings.printer.max_velocity)|int %}
+	
+	{% set iterations = params.ITERATIONS|default(5)|int %}
+	
+	{% set accel  = params.ACCEL|default(printer.configfile.settings.printer.max_accel)|int %}
+	
+	{% set bound = params.BOUND|default(20)|int %}
+	
+	{% set smallpatternsize = SMALLPATTERNSIZE|default(20)|int %}
+	
+	
+	
+	{% set x_min = printer.toolhead.axis_minimum.x + bound %}
+	{% set x_max = printer.toolhead.axis_maximum.x - bound %}
+	{% set y_min = printer.toolhead.axis_minimum.y + bound %}
+	{% set y_max = printer.toolhead.axis_maximum.y - bound %}
+	
+	
+	
+	{% set x_center = (printer.toolhead.axis_minimum.x|float + printer.toolhead.axis_maximum.x|float ) / 2 %}
+	{% set y_center = (printer.toolhead.axis_minimum.y|float + printer.toolhead.axis_maximum.y|float ) / 2 %}
+	
+	
+	{% set x_center_min = x_center - (smallpatternsize/2) %}
+	{% set x_center_max = x_center + (smallpatternsize/2) %}
+	{% set y_center_min = y_center - (smallpatternsize/2) %}
+	{% set y_center_max = y_center + (smallpatternsize/2) %}
+	
+	
+	SAVE_GCODE_STATE NAME=TEST_SPEED
+	
+	
+	{ action_respond_info("TEST_SPEED: starting %d iterations at speed %d, accel %d" % (iterations, speed, accel)) }
+	
+	
+	G28
+	
+	{% if printer.configfile.settings.quad_gantry_level %}
+	{% if printer.quad_gantry_level.applied == False %}
+	QUAD_GANTRY_LEVEL
+	G28 Z
+	{% endif %}
+	{% endif %}
+	
+	G90
+	G1 X{printer.toolhead.axis_maximum.x-50} Y{printer.toolhead.axis_maximum.y-50} F{30*60}
+	G28 X Y
+	G0 X{printer.toolhead.axis_maximum.x-1} Y{printer.toolhead.axis_maximum.y-1} F{30*60}
+	G4 P1000
+	GET_POSITION
+	
+	
+	G0 X{x_min} Y{y_min} Z{bound + 10} F{speed*60}
+	
+	
+	SET_VELOCITY_LIMIT VELOCITY={speed} ACCEL={accel} ACCEL_TO_DECEL={accel / 2}
+	
+	{% for i in range(iterations) %}
+	
+	
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_max} Y{y_max} F{speed*60}
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	G0 X{x_min} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	
+	
+	G0 X{x_min} Y{y_min} F{speed*60}
+	G0 X{x_min} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_max} F{speed*60}
+	G0 X{x_max} Y{y_min} F{speed*60}
+	
+	
+	
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_max} Y{y_center_max} F{speed*60}
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	G0 X{x_center_min} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	
+	
+	G0 X{x_center_min} Y{y_center_min} F{speed*60}
+	G0 X{x_center_min} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_max} F{speed*60}
+	G0 X{x_center_max} Y{y_center_min} F{speed*60}
+	{% endfor %}
+	
+	
+	SET_VELOCITY_LIMIT VELOCITY={printer.configfile.settings.printer.max_velocity} ACCEL={printer.configfile.settings.printer.max_accel} ACCEL_TO_DECEL={printer.configfile.settings.printer.max_accel_to_decel}
+	
+	
+	G28
+	
+	G90
+	G0 X{printer.toolhead.axis_maximum.x-1} Y{printer.toolhead.axis_maximum.y-1} F{30*60}
+	G4 P1000
+	GET_POSITION
+	
+	
+	RESTORE_GCODE_STATE NAME=TEST_SPEED
+
+[save_variables]
+filename = ~/printer_data/config/.variables.stb
+
+[virtual_sdcard]
+path = ~/printer_data/gcodes
+
+[mcu]
+serial = /dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00
+
+[stepper_x]
+step_pin = PB13
+dir_pin = PB12
+enable_pin = !PB14
+rotation_distance = 40
+microsteps = 16
+endstop_pin = PC0
+position_endstop = 118
+position_max = 118
+homing_speed = 20
+homing_retract_dist = 5
+homing_positive_dir = true
+
+[tmc2209 stepper_x]
+uart_pin = PB15
+interpolate = true
+run_current = 0.5
+sense_resistor = 0.110
+stealthchop_threshold = 500
+
+[stepper_y]
+step_pin = PB10
+dir_pin = PB2
+enable_pin = !PB11
+rotation_distance = 40
+microsteps = 16
+endstop_pin = PC1
+position_endstop = 120
+position_max = 120
+homing_speed = 20
+homing_retract_dist = 5
+homing_positive_dir = true
+
+[tmc2209 stepper_y]
+uart_pin = PC6
+interpolate = true
+run_current = 0.5
+sense_resistor = 0.110
+stealthchop_threshold = 500
+
+[stepper_z]
+step_pin = PB0
+dir_pin = !PC5
+enable_pin = !PB1
+rotation_distance = 8
+microsteps = 16
+endstop_pin = PC2
+position_endstop = -0.180
+position_max = 120
+position_min = -1
+homing_speed = 10
+second_homing_speed = 3.0
+homing_retract_dist = 3.0
+
+[tmc2209 stepper_z]
+uart_pin = PC10
+interpolate = false
+run_current = 0.600
+sense_resistor = 0.110
+stealthchop_threshold = 0
+
+[extruder]
+step_pin = PB3
+dir_pin = PB4
+enable_pin = !PD2
+rotation_distance = 13.1544
+gear_ratio = 50:17
+microsteps = 16
+nozzle_diameter = 0.400
+filament_diameter = 1.750
+heater_pin = PC8
+sensor_type = ATC Semitec 104GT-2
+sensor_pin = PA0
+control = pid
+pid_kp = 19.933
+pid_ki = 0.916
+pid_kd = 108.388
+min_temp = 0
+max_temp = 270
+min_extrude_temp = 0
+max_extrude_only_distance = 780.0
+max_extrude_cross_section = 50.0
+
+[tmc2209 extruder]
+uart_pin = PC11
+interpolate = false
+run_current = 0.4
+sense_resistor = 0.110
+stealthchop_threshold = 0
+
+[heater_bed]
+heater_pin = PC9
+sensor_type = ATC Semitec 104GT-2
+control = pid
+pid_kp = 30.821
+pid_ki = 0.430
+pid_kd = 552.458
+min_temp = 0
+max_temp = 200
+sensor_pin = PC3
+smooth_time = 3.0
+max_power = 0.5
+
+[printer]
+kinematics = corexy
+max_velocity = 500
+max_accel = 6000
+max_z_velocity = 15
+max_z_accel = 45
+square_corner_velocity = 6.0
+
+[fan]
+pin = PA8
+kick_start_time = 0.5
+off_below = 0.13
+cycle_time = 0.010
+
+[idle_timeout]
+timeout = 3600
+
+[homing_override]
+axes = z
+set_position_z = 0
+gcode = 
+	G90
+	G0 Z5 F600
+	G28 X Y
+	G0 X30 Y0 F3600
+	
+	G28 Z
+	G0 Z10 F1800
+	G0 X60 Y60 Z20 F3600
+=======================
+Extruder max_extrude_ratio=20.787584
+mcu 'mcu': Starting serial connect
+mcu 'mcu': Unable to open serial port: [Errno 2] could not open port /dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00: [Errno 2] No such file or directory: '/dev/serial/by-id/usb-Klipper_stm32f103xe_35FFDC055254323333890543-if00'
+                                                                                                                                                                                                                                                                                                                                                                                                               
