@@ -5,4 +5,4 @@ Stock mootor on Z
 Umbilical Cord Mod  
 Kirigami Bed Mod  
 West3D Linear Rails on X/Y  
-
+Klicky Probe with KlickSwipe  
