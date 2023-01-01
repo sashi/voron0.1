@@ -1,13 +1,13 @@
 #!/bin/bash
 
-MJPGSTREAMER_HOME=/home/pi/mjpg-streamer/mjpg-streamer-experimental
+MJPGSTREAMER_HOME=/home/pi/mjpg-streamer/mjpg-streamer/mjpg-streamer-experimental
 MJPGSTREAMER_INPUT_USB="input_uvc.so"
 MJPGSTREAMER_INPUT_RASPICAM="input_raspicam.so"
 
 # init configuration
 camera="auto"
-camera_usb_options="-r 640x480 -f 10"
-camera_raspi_options="-fps 20"
+camera_usb_options="-r 640x480 -f 25"
+camera_raspi_options="-fps 25"
 
 if [ -e "/boot/octopi.txt" ]; then
     source "/boot/octopi.txt"
