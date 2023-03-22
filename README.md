@@ -6,3 +6,5 @@ Umbilical Cord Mod
 Kirigami Bed Mod  
 West3D Linear Rails on X/Y  
 Klicky Probe with KlickSwipe  
+Dragon Burner Toolhead by chirpy2605  
+Sherpa Mini  
